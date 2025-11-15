@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Morphospace clusters report</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 40px;
+            border-bottom: 2px solid #ecf0f1;
+            padding-bottom: 8px;
+        }
+        .metadata {
+            background: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 30px;
+        }
+        .code-block {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 15px 0;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            font-size: 14px;
+        }
+        .code-block pre {
+            margin: 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .output {
+            margin: 20px 0;
+        }
+        .output img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .caption {
+            font-style: italic;
+            color: #666;
+            text-align: center;
+            margin-top: 8px;
+            font-size: 14px;
+        }
+        .file-list {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #ffc107;
+        }
+        .file-list ul {
+            margin: 10px 0;
+        }
+        hr {
+            border: none;
+            border-top: 1px solid #dee2e6;
+            margin: 30px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Morphospace clusters report</h1>
+    
+    <div class="metadata">
+        <strong>Author:</strong> Joelle Habib<br>
+        <strong>Date:</strong> November 15, 2025<br>
+        <strong>Script:</strong> morphospace.r<br>
+        <strong>Output directory:</strong> /Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/
+    </div>
+
+    <hr>
+
+    <h2>Read data</h2>
+    <p><strong>Action:</strong> Load the Ecotaxa export and select ascent samples containing detritus/feces objects.</p>
+    
+    <div class="code-block">
+<pre># Read Ecotaxa table and select ascent samples
+ecotaxa_df <- read.table("/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/float_ecotaxa.tsv", 
+                         sep = "\t", header = TRUE)
+equator_df <- subset(ecotaxa_df, grepl("a", ecotaxa_df$sample_id))
+
+# keep only detritus / feces
+equator_detritus <- equator_df %>%
+  filter(grepl("detritus", object_annotation_hierarchy) | 
+         grepl("feces", object_annotation_hierarchy))
+
+# build image paths and check existence
+base_dir <- "/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/uvp6_images/"
+imgs <- str_c(base_dir, equator_detritus$sample_id, "/1/", 
+              equator_detritus$object_id, ".png")
+img_ok <- file.exists(imgs)
+sum(!img_ok) # number of missing files
+equator_detritus$img_path <- imgs
+equator_detritus <- equator_detritus[img_ok,]</pre>
+    </div>
+
+    <hr>
+
+    <h2>Clean data</h2>
+    <p><strong>Action:</strong> Select relevant traits, remove unusable columns, and drop near-constant variables.</p>
+    
+    <div class="code-block">
+<pre># select traits
+traits <- equator_detritus |>
+  select(area:skeleton_area) |>
+  select(-angle) |>
+  select(-starts_with("nb")) |>
+  select(-area_exc, -convarea, -skelarea, -symetriehc, -symetrievc, 
+         -`.area`, -convperim_perim, -feretareaexc, -perimareaexc) |>
+  select(-circex, -fcons, -height, -starts_with("histcum"), 
+         -kurt_mean, -max, -mode, -min, -minor, -perimferet, 
+         -perimmajor, -slope, -width, -x, -xm, -y, -ym)
+
+# check no trait has variance 0
+which(sapply(traits, var, na.rm=TRUE) < 10^-5)
+# skew_mean had a variance smaller than 10^-5 so remove it
+traits <- select(traits, -skew_mean)</pre>
+    </div>
+
+    <hr>
+
+    <h2>Transform & diagnostics</h2>
+    <p><strong>Action:</strong> Apply Yeo-Johnson transformation to traits for normality; generate histograms to inspect distributions.</p>
+    
+    <div class="code-block">
+<pre># Apply trimming to extreme values
+traits_trimmed <- traits |>
+  mutate(
+    area = mask_extreme(area, c(0, 0.1)),
+    `circ.` = mask_extreme(`circ.`, c(0, 0.05)),
+    convarea_area = mask_extreme(convarea_area, c(0, 0.03)),
+    # ... (additional trimming operations)
+  )
+
+# Apply Yeo-Johnson transformation
+traits_transfo <- mutate_all(traits_trimmed, function(x) {
+  yeo_johnson(x) |> as.numeric()
+})
+
+# Plot transformed traits
+traits_transfo |> 
+  pivot_longer(everything()) |> 
+  ggplot() + facet_wrap(~name, scale="free") +
+  geom_histogram(aes(x=value), bins=50)
+ggsave(file.path(out_dir, "traits_transfo_hist.png"), 
+       width = 12, height = 8, dpi = 150)</pre>
+    </div>
+
+    <div class="output">
+        <img src="/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/traits_transfo_hist.png" 
+             alt="Transformed trait histograms">
+        <div class="caption">Transformed trait histograms (Yeo-Johnson)</div>
+    </div>
+
+    <hr>
+
+    <h2>PCA / Morphospace</h2>
+    <p><strong>Action:</strong> Compute morphospace with PCA; inspect eigenvalues and variable loadings.</p>
+    
+    <div class="code-block">
+<pre># compute morphospace (PCA) on transformed traits
+ms <- morphospace(traits_transfo, weights=rep(1, nrow(traits_transfo)))
+
+ms$eig |> head(10)  # inspect eigenvalues
+
+# basic plotting of individuals
+objs <- ms$ind$coord |> as_tibble()
+ggplot(objs) + 
+  geom_point(aes(Dim.1, Dim.2), shape='.') + 
+  coord_fixed()</pre>
+    </div>
+
+    <div class="output">
+        <img src="/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/Eig.jpg" 
+             alt="Eigenvalues">
+        <div class="caption">Eigenvalues / Variance explained</div>
+    </div>
+
+    <div class="output">
+        <img src="/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/PCA_FactoMineR_var.jpg" 
+             alt="PCA variables">
+        <div class="caption">PCA variables (FactoMineR)</div>
+    </div>
+
+    <hr>
+
+    <h2>Visualize morphospace</h2>
+    <p><strong>Action:</strong> Project images into the morphospace with tiled image plots and annotate with variable vectors.</p>
+    
+    <div class="code-block">
+<pre># create annotated morphospace with image tiles and variable vectors
+preprocess <- function(x) {
+  x |> img_chop(bottom=31) |> img_adjust_gamma(gamma=0.7)
+}
+
+var <- ms$var$coord[,1:2] |> as.data.frame() |> rownames_to_column()
+
+ggmorph_tile(ms, equator_detritus$img_path, steps=18, n_imgs=3, 
+             fun=preprocess) +
+  geom_segment(data=var, aes(x = 0, y = 0, 
+                             xend = (Dim.1*5), yend = (Dim.2*5)),
+               arrow = arrow(length = unit(1/2, "picas")), 
+               color = 'black') +
+  geom_label(aes(x=6, y=-3, label="Brightness", fontface = 2), size = 7) +
+  geom_label(aes(x=6, y=3, label="Size", fontface = 2), size = 7) +
+  geom_label(aes(x=-6, y=3, label="Homogeneity", fontface = 2), size = 7) +
+  geom_label(aes(x=-6, y=-3, label="Circularity", fontface = 2), size = 7)</pre>
+    </div>
+
+    <div class="output">
+        <img src="/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/morphospace_annotated.png" 
+             alt="Annotated morphospace">
+        <div class="caption">Annotated morphospace (image tiles + variable vectors)</div>
+    </div>
+
+    <div class="output">
+        <img src="/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/morphospace_pca_vectors.png" 
+             alt="Morphospace with PCA vectors">
+        <div class="caption">Morphospace with PCA vectors</div>
+    </div>
+
+    <hr>
+
+    <h2>Clustering</h2>
+    <p><strong>Action:</strong> Clustering with wkmeans (k = 5); export cluster centers and assignments.</p>
+    
+    <div class="code-block">
+<pre># clustering with wkmeans (example: k = 5)
+library(wkmeans)
+clust_k <- wkmeans(ms$ind$coord[,1:4], k=5, nstart=100, iter_max=30)
+
+centers <- as_tibble(clust_k$centers)
+
+# Save cluster centers and assignments
+write.csv(centers, 
+          "/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/kmeans_centers_morpho.csv", 
+          row.names = FALSE)
+write.csv(objs, 
+          "/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/morphotypes_df.csv", 
+          row.names = FALSE)
+
+# Plot clusters
+objs$cluster_kmeans <- clust_k$cluster
+ggplot(objs) +
+  geom_point(aes(Dim.1, Dim.2, colour=factor(clust_k$cluster)), size = 2) +
+  coord_fixed() + scale_colour_discrete(guide="none") +
+  theme_minimal()</pre>
+    </div>
+
+    <div class="output">
+        <img src="/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/morphospace_200_clusters.png" 
+             alt="Cluster assignments">
+        <div class="caption">Morphospace showing cluster assignments</div>
+    </div>
+
+    <div class="output">
+        <img src="/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/morphospace_clusters_reduced.png" 
+             alt="Reduced cluster visualization">
+        <div class="caption">Reduced cluster visualization</div>
+    </div>
+
+    <hr>
+
+    <h2>Cluster inspection & summary plots</h2>
+    <p><strong>Action:</strong> Sample images per cluster and compare features (size, circularity, brightness, structure) via boxplots.</p>
+    
+    <div class="code-block">
+<pre># Get example images from each cluster
+clust_imgs <- equator_detritus |>
+  group_by(cluster_kmeans) |>
+  sample_n(size=min(n(), 100)) |>
+  group_map(.f=function(x, y) {
+    ggimg_grid(x$img_path, fun=preprocess, scale=0.002) +
+      labs(title=str_c("Cluster ", y$cluster_kmeans))
+  })
+
+# Create boxplots comparing cluster features
+p1 <- ggplot(size, aes(x = Cluster, y = perim., fill = Cluster)) +
+  geom_boxplot() + ggtitle("Size")
+p2 <- ggplot(shape, aes(x = Cluster, y = circ., fill = Cluster)) +
+  geom_boxplot() + ggtitle("Shape")
+p3 <- ggplot(brightness, aes(x = Cluster, y = mean, fill = Cluster)) +
+  geom_boxplot() + ggtitle("Brightness")
+p4 <- ggplot(structure, aes(x = Cluster, y = kurt, fill = Cluster)) +
+  geom_boxplot() + ggtitle("Structure")
+
+grid_plot <- arrangeGrob(p1, p2, p3, p4, ncol = 4)</pre>
+    </div>
+
+    <div class="output">
+        <img src="/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/cluster_images.png" 
+             alt="Example images per cluster">
+        <div class="caption">Example images sampled from each cluster</div>
+    </div>
+
+    <div class="output">
+        <img src="/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/boxplots_grid.png" 
+             alt="Boxplots">
+        <div class="caption">Boxplots comparing size, shape, brightness and structure across clusters</div>
+    </div>
+
+    <hr>
+
+    <h2>Files produced</h2>
+    <div class="file-list">
+        <p><strong>Main output files:</strong></p>
+        <ul>
+            <li><code>kmeans_centers_morpho.csv</code> - Cluster center coordinates</li>
+            <li><code>morphotypes_df.csv</code> - Morphotype assignments for all objects</li>
+            <li><code>k-means_pca_results_all.csv</code> - Complete PCA results with cluster assignments</li>
+            <li><code>k-means_pca_results_q25.csv</code> - Filtered results (Q25 distance threshold)</li>
+        </ul>
+        <p><strong>Representative images:</strong></p>
+        <ul>
+            <li><code>Eig.jpg</code> - Eigenvalues plot</li>
+            <li><code>morphospace_annotated.png</code> - Annotated morphospace</li>
+            <li><code>morphospace_pca_vectors.png</code> - PCA vectors overlay</li>
+            <li><code>morphospace_clusters_reduced.png</code> - Cluster visualization</li>
+            <li><code>cluster_images.png</code> - Example images per cluster</li>
+            <li><code>boxplots_grid.png</code> - Feature comparison boxplots</li>
+        </ul>
+        <p>All located in: <code>/Users/joellehabib/GIT/TRATLEQ/Data/Float_data/15_OCT2025/</code></p>
+    </div>
+
+</body>
+</html>
